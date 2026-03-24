@@ -5,80 +5,114 @@ import plotly.express as px
 # --- 1. PRO CONFIGURATION ---
 st.set_page_config(page_title="PhonePe Pulse PRO", layout="wide", page_icon="📈")
 
-# Custom CSS for that "Premium" feel
+# Custom CSS for a professional dark-themed dashboard
 st.markdown("""
     <style>
     .main { background-color: #0e1117; }
-    .stMetric { background-color: #1e2130; padding: 15px; border-radius: 10px; border: 1px solid #3e4259; }
+    [data-testid="stMetricValue"] { font-size: 28px; color: #6e42ff; }
+    .stMetric { 
+        background-color: #1e2130; 
+        padding: 20px; 
+        border-radius: 12px; 
+        border: 1px solid #3e4259;
+    }
     </style>
-    """, unsafe_allow_value=True)
+    """, unsafe_allow_html=True)
 
-# --- 2. DATA LOADERS (Cached for speed) ---
+# --- 2. DATA LOADERS (Cached for performance) ---
 @st.cache_data
-def get_data():
-    trans_df = pd.read_csv("phonepe_transactions.csv")
-    user_df = pd.read_csv("phonepe_users.csv")
-    map_df = pd.read_csv("map_transactions.csv") # Make sure this is in your repo!
-    return trans_df, user_df, map_df
+def load_and_clean_data():
+    # Load your 3 core CSVs
+    t_df = pd.read_csv("phonepe_transactions.csv")
+    u_df = pd.read_csv("phonepe_users.csv")
+    m_df = pd.read_csv("map_transactions.csv")
+    
+    # Data Cleaning: Convert "andaman-&-nicobar" to "Andaman & Nicobar Islands"
+    # This ensures the map GeoJSON recognizes the names correctly
+    for df in [t_df, u_df, m_df]:
+        df['State'] = df['State'].str.replace('-', ' ').str.title()
+        df['State'] = df['State'].str.replace('Andaman & Nicobar Islands', 'Andaman & Nicobar')
+        
+    return t_df, u_df, m_df
 
-trans_df, user_df, map_df = get_data()
+try:
+    trans_df, user_df, map_df = load_and_clean_data()
+except FileNotFoundError:
+    st.error("Error: CSV files not found. Ensure phonepe_transactions.csv, phonepe_users.csv, and map_transactions.csv are in your repo.")
+    st.stop()
 
-# --- 3. SIDEBAR (Clean & Organized) ---
+# --- 3. SIDEBAR NAVIGATION ---
 with st.sidebar:
-    st.image("https://www.phonepe.com/webstatic/8404/static/76798b68894988775267b2d56637313a/43110/phonepe-logo.png", width=200)
-    st.title("Control Panel")
-    year = st.selectbox("Select Financial Year", sorted(trans_df['Year'].unique(), reverse=True))
-    quarter = st.slider("Select Quarter", 1, 4, 1)
-    state = st.selectbox("Focus State", sorted(trans_df['State'].unique()))
+    st.title("📊 Control Panel")
+    year = st.selectbox("Select Year", sorted(trans_df['Year'].unique(), reverse=True))
+    quarter = st.select_slider("Select Quarter", options=[1, 2, 3, 4])
+    st.info("Filter data to see insights across India.")
 
-# Filter data once to use everywhere
-f_trans = trans_df[(trans_df['Year'] == year) & (trans_df['Quarter'] == quarter) & (trans_df['State'] == state)]
+# Global Filters
+f_trans = trans_df[(trans_df['Year'] == year) & (trans_df['Quarter'] == quarter)]
 f_map = map_df[(map_df['Year'] == year) & (map_df['Quarter'] == quarter)]
 
-# --- 4. TOP ROW: KPI METRICS ---
+# --- 4. TOP ROW: DYNAMIC KPI METRICS ---
+st.title("📱 PhonePe Pulse Analytics Dashboard")
+st.caption(f"Visualizing Data for Financial Year {year} - Quarter {quarter}")
+
 total_val = f_trans['Transaction_Amount'].sum()
 total_count = f_trans['Transaction_Count'].sum()
-avg_val = total_val / total_count if total_count > 0 else 0
+# Calculate Transaction per User if registered users data exists
+total_users = user_df[(user_df['Year'] == year) & (user_df['Quarter'] == quarter)]['Registered_Users'].sum()
 
-col1, col2, col3 = st.columns(3)
-col1.metric("Total Transaction Value", f"₹{total_val/1e7:.2f} Cr", delta="Regional Volume")
-col2.metric("Total Transaction Count", f"{total_count/1e5:.2f} Lakh", delta="Active Users")
-col3.metric("Avg. Ticket Size", f"₹{avg_val:.2f}", delta="Per User")
+m1, m2, m3 = st.columns(3)
+m1.metric("Total Transaction Value", f"₹{total_val/1e7:.2f} Cr")
+m2.metric("Total Transactions", f"{total_count/1e5:.2f} L")
+m3.metric("Registered Users", f"{total_users/1e5:.2f} L")
 
-st.divider()
+st.markdown("---")
 
-# --- 5. MAIN DASHBOARD LAYOUT ---
-row1_col1, row1_col2 = st.columns([1.2, 0.8])
+# --- 5. MIDDLE ROW: GEOGRAPHIC & CATEGORY ANALYSIS ---
+col_left, col_right = st.columns([1.2, 0.8])
 
-with row1_col1:
-    st.subheader("🗺️ Geographic Distribution (India)")
-    # Group map data by state for the India map
-    india_map_data = f_map.groupby("State")["Amount"].sum().reset_index()
+with col_left:
+    st.subheader("🗺️ India Transaction Heatmap")
+    # Mapping Data
+    map_viz_data = f_map.groupby("State")["Amount"].sum().reset_index()
     
-    fig_map = px.choropleth(
-        india_map_data,
+    fig_india = px.choropleth(
+        map_viz_data,
         geojson="https://gist.githubusercontent.com/jbrobst/56c13bbbf9ad97d3121354efebd9e57e/raw/0ad293846248c1d3008a30ad47e440590f1a3229/india_states.geojson",
         featureidkey='properties.ST_NM',
         locations='State',
         color='Amount',
-        color_continuous_scale="Plasma",
-        hover_name="State"
+        color_continuous_scale="Viridis",
+        hover_name="State",
+        template="plotly_dark"
     )
-    fig_map.update_geos(fitbounds="locations", visible=False)
-    fig_map.update_layout(height=500, margin={"r":0,"t":0,"l":0,"b":0})
-    st.plotly_chart(fig_map, use_container_width=True)
+    fig_india.update_geos(fitbounds="locations", visible=False)
+    fig_india.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=500)
+    st.plotly_chart(fig_india, use_container_width=True)
 
-with row1_col2:
-    st.subheader("📊 Transaction Type")
-    fig_pie = px.sunburst(f_trans, path=['Transaction_Type'], values='Transaction_Amount',
-                          color='Transaction_Amount', color_continuous_scale='RdBu')
+with col_right:
+    st.subheader("📈 Transaction Type")
+    type_data = f_trans.groupby("Transaction_Type")["Transaction_Amount"].sum().reset_index()
+    fig_pie = px.pie(type_data, values='Transaction_Amount', names='Transaction_Type', 
+                     hole=0.5, color_discrete_sequence=px.colors.sequential.RdBu)
+    fig_pie.update_layout(showlegend=False, height=450)
     st.plotly_chart(fig_pie, use_container_width=True)
 
-# --- 6. SECOND ROW: ANALYSIS ---
-st.subheader(f"📈 Top Districts in {state}")
-dist_data = f_map[f_map['State'] == state].sort_values(by="Amount", ascending=False).head(10)
-fig_dist = px.bar(dist_data, x="District", y="Amount", color="Amount", template="plotly_dark")
-st.plotly_chart(fig_dist, use_container_width=True)
+# --- 6. BOTTOM ROW: TOP PERFORMERS ---
+st.markdown("---")
+st.subheader("🏆 Top 10 Performing States")
+top_10_states = f_trans.groupby("State")["Transaction_Amount"].sum().sort_values(ascending=False).head(10).reset_index()
 
-# --- 7. FOOTER ---
-st.caption(f"Data source: PhonePe Pulse Open Data | Visualizing {state} for {year} Q{quarter}")
+fig_top = px.bar(
+    top_10_states, 
+    x="Transaction_Amount", 
+    y="State", 
+    orientation='h',
+    color="Transaction_Amount",
+    color_continuous_scale="Blues",
+    text_auto='.2s'
+)
+fig_top.update_layout(yaxis={'categoryorder':'total ascending'}, height=400)
+st.plotly_chart(fig_top, use_container_width=True)
+
+st.caption("Data processed from PhonePe Pulse Open Repo. Built by Kartik.")
